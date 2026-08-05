@@ -115,15 +115,56 @@ flowchart TB
 
 ## 4. Pipeline de seguridad
 
-Seis etapas que corren en paralelo dentro de `.github/workflows/devsecops.yml`:
+Cinco etapas de análisis que corren en paralelo dentro de
+`.github/workflows/devsecops.yml`, más una sexta que consolida el resultado:
 
 | Etapa | Herramienta | Punto de control |
 |-------|-------------|------------------|
 | Secretos | Gitleaks con reglas propias | cualquier secreto detiene la integración |
 | Análisis de código | Semgrep con reglas oficiales y propias | ningún hallazgo alto o crítico |
-| Dependencias e inventario | Trivy | fallas altas o críticas detienen y se genera el inventario |
+| Dependencias e inventario | Trivy | CVSS 8.0 o más si es directa, 9.0 o más si es indirecta; luego se genera el inventario |
 | Contenedor e infraestructura | Hadolint, Trivy y Checkov | imagen sin versión fija, fallas críticas o puertos abiertos detienen |
 | Escaneo dinámico | OWASP ZAP con sesión iniciada | los hallazgos altos detienen y los medios abren un caso |
+| Informe consolidado | Generador propio en Python | reúne las cinco etapas en un PDF legible |
+
+Cada etapa deja su reporte en formato JSON **antes** de decidir si detiene la
+integración, y la condición que bloquea se evalúa en un paso aparte sobre ese
+mismo archivo. Se hizo así por dos razones: el informe final se puede armar con
+el panorama completo aunque una etapa haya fallado, y la regla que bloquea queda
+escrita de forma explícita en el pipeline en lugar de esconderse en un parámetro
+de la herramienta. Es lo que permite, por ejemplo, exigir un puntaje distinto
+según la dependencia sea directa o indirecta.
+
+### Informe consolidado en PDF
+
+La última etapa descarga los reportes de todas las anteriores y genera
+`informe-seguridad-fleetsec.pdf`, que queda como artefacto de la ejecución con
+el nombre `informe-seguridad-pdf`. El documento reutiliza la paleta, la
+tipografía y las medidas del informe ejecutivo del análisis de vulnerabilidades,
+de modo que ambos se leen como piezas de la misma familia.
+
+El informe trae el estado del pipeline y el conteo de hallazgos, la distribución
+por severidad, el resultado de cada etapa, el detalle por motor y un anexo que
+deja a la vista cómo se tradujo la severidad de cada herramienta a una escala
+única y qué regla detiene cada etapa. El mismo cuadro se publica en el panel de
+la ejecución, para poder leerlo sin descargar nada.
+
+Se puede generar en local sobre artefactos ya descargados:
+
+```bash
+pip install -r scripts/requirements.txt
+python scripts/generar_reporte_seguridad.py \
+    --artefactos artefactos \
+    --salida informe-seguridad-fleetsec.pdf \
+    --resumen resumen-seguridad.md \
+    --etapa secretos=success --etapa sast=failure
+```
+
+Dos decisiones sobre el contenido. El valor de un secreto detectado nunca se
+copia al PDF, solo la regla que lo encontró y su ubicación, porque el informe se
+comparte y volver a escribirlo ahí sería filtrarlo otra vez. Y la traducción de
+severidades se imprime en el anexo en lugar de quedar implícita, porque es un
+criterio propio y quien lea el informe debe poder discutirlo.
 
 Para mantener la ejecución por debajo de 15 minutos, las etapas corren en
 paralelo, se cancela la ejecución anterior de la misma rama, se guarda en caché
@@ -165,6 +206,19 @@ antes de subir el código.
 - El análisis de código solo detiene ante hallazgos altos. La razón es cumplir
   el requisito sin frenar la entrega por avisos de menor gravedad, que quedan
   como información para revisar.
+- Escanear primero y decidir después. Los escáneres ya no reciben la condición
+  de bloqueo como parámetro, sino que producen el reporte completo y un paso
+  siguiente evalúa la regla sobre ese archivo. La razón es doble: el informe
+  consolidado necesita el panorama completo aunque la etapa falle, y una regla
+  como la del puntaje distinto por tipo de dependencia no se puede expresar con
+  los parámetros de la herramienta.
+- Cuando el escáner no informa si una dependencia es directa o indirecta, se
+  asume directa. La razón es que ante la duda conviene aplicar el umbral más
+  estricto y no dejar pasar una falla por falta de metadatos.
+- El informe se genera solo, nunca se edita a mano. La razón es que sirve como
+  evidencia de auditoría: lo que aparece en el PDF es exactamente lo que
+  reportaron las herramientas en esa ejecución, y es reproducible a partir de
+  los artefactos.
 
 ---
 
@@ -204,6 +258,7 @@ de la persona.
 ├── .pre-commit-config.yaml revisión de secretos antes de cada commit
 ├── .zap/rules.tsv          ajuste del escaneo dinámico
 ├── app/                    aplicación corregida que analiza el pipeline
+├── scripts/                generador del informe consolidado en PDF
 ├── _vulnerable_baseline/   versión vulnerable de referencia, ignorada por el pipeline
 ├── infrastructure/         infraestructura como código y sus evidencias
 ├── incident_response/      indicadores, guía de respuesta y reglas de detección

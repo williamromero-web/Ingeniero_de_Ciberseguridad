@@ -30,3 +30,22 @@ sbom-cyclonedx.json
 *-report.json
 zap-report.*
 trivy-*.json
+report_json.json
+report_html.html
+dependencias-bloqueantes.txt
+
+# ---------------------------------------------------------------------------
+# Informe consolidado: se genera en cada ejecución del pipeline y se publica
+# como artefacto, no se versiona. El informe ejecutivo del análisis de
+# vulnerabilidades sí se conserva en el repositorio y no se toca aquí
+# ---------------------------------------------------------------------------
+artefactos/
+informe-seguridad-fleetsec.pdf
+resumen-seguridad.md
+
+# ---------------------------------------------------------------------------
+# Python: cache del generador del informe
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
