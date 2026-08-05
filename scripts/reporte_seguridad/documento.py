@@ -86,10 +86,15 @@ class Informe:
     """Construye el PDF a partir de los hallazgos y del estado de cada etapa."""
 
     def __init__(self, agrupados: dict[str, list[modelo.Hallazgo]],
-                 resultados: dict[str, str], contexto: dict[str, str]):
+                 resultados: dict[str, str], contexto: dict[str, str],
+                 demostracion: bool = False):
         self.agrupados = agrupados
         self.resultados = resultados
         self.contexto = contexto
+        # Una ejecución de demostración incluye a propósito la versión
+        # vulnerable de referencia, así que termina en rojo por diseño. Se marca
+        # en el documento para que nadie la confunda con un fallo real.
+        self.demostracion = demostracion
         self.todos = [h for lista in agrupados.values() for h in lista]
         self.conteo = modelo.contar_por_severidad(self.todos)
         self.bloqueantes = modelo.contar_bloqueantes(self.todos)
@@ -123,6 +128,8 @@ class Informe:
             partes.append(f"Rama: {self.contexto['rama']}")
         if self.contexto.get("ejecucion"):
             partes.append(f"Ejecución: {self.contexto['ejecucion']}")
+        if self.demostracion:
+            partes.append("Ejecución de demostración")
         return "   -   ".join(partes)
 
     # ------------------------------------------------------------------
@@ -150,6 +157,14 @@ class Informe:
 
     def _panorama(self, pdf: Documento):
         pdf.titulo_seccion("Panorama general")
+        if self.demostracion:
+            pdf.nota(
+                "Ejecución de demostración. Se lanzó a mano con la versión "
+                "vulnerable de referencia dentro del alcance, para comprobar "
+                "que las puertas del pipeline se disparan de verdad. Los "
+                "hallazgos de la carpeta _vulnerable_baseline corresponden a "
+                "código que se conserva a propósito y que no se despliega.")
+            pdf.ln(2)
         pdf.parrafo(self._texto_panorama())
 
     def _texto_panorama(self) -> str:

@@ -171,21 +171,44 @@ paralelo, se cancela la ejecución anterior de la misma rama, se guarda en cach�
 la instalación de las herramientas, cada escáner revisa solo la carpeta que le
 corresponde, y las acciones de terceros se fijan por versión exacta.
 
-### La versión vulnerable de referencia está dentro del alcance
+### Modo de demostración: comprobar que las puertas se disparan
 
-El detector de secretos y el análisis de código revisan también
-`_vulnerable_baseline/`, que conserva la aplicación antes de las correcciones
-con sus secretos y sus fallas originales. Se hizo a propósito: es la forma de
-comprobar que las puertas se disparan de verdad en lugar de confiar en que
-funcionarían, y de que el informe consolidado se pueda revisar con hallazgos
-reales y no solo en vacío.
+Una puerta que nunca ha bloqueado nada no es una puerta comprobada. Para poder
+demostrar que funcionan sin dejar la rama principal en rojo, el pipeline acepta
+una ejecución manual con un interruptor que mete la versión vulnerable de
+referencia dentro del alcance.
 
-La consecuencia es que el pipeline queda en rojo mientras esa carpeta siga en
-el alcance, porque encuentra lo que se le puso a encontrar. Para volver al
-comportamiento anterior hay que deshacer dos cosas: reponer
-`'''_vulnerable_baseline'''` en la lista `paths` del allowlist de
-`.gitleaks.toml`, y dejar el alcance de Semgrep en `app/`. Ambos sitios están
-señalados con un comentario en el propio archivo.
+Se lanza desde la pestaña Actions: se elige el flujo, se pulsa *Run workflow* y
+se marca la casilla **Incluir la versión vulnerable de referencia en el
+alcance**. Los empujones y las solicitudes de cambios no se ven afectados: ahí
+el interruptor siempre está apagado y el alcance es solo la aplicación
+corregida.
+
+| Etapa | Ejecución normal | Con el interruptor activo |
+|-------|:----------------:|:-------------------------:|
+| Secretos | Aprobado | **Detenido**, encuentra la clave de nube y el secreto de sesión |
+| Análisis de código | Aprobado | **Detenido**, se disparan las reglas propias sobre el código vulnerable |
+| Dependencias e inventario | Aprobado | Aprobado, la carpeta no declara dependencias propias |
+| Contenedor e infraestructura | Aprobado | **Detenido**, el Dockerfile de referencia no fija la versión de la imagen base |
+| Escaneo dinámico | Aprobado | Aprobado, sigue recorriendo la aplicación corregida |
+
+Cómo está montado. Hay una sola variable, `INCLUIR_BASELINE`, que se calcula una
+vez al principio del flujo y leen todas las etapas. El detector de secretos
+deriva su configuración de la real y borra únicamente la línea que excluye la
+carpeta, en lugar de mantener un segundo archivo que acabaría
+desincronizándose. El análisis de código recibe la lista de rutas por variable.
+La revisión del contenedor añade un segundo análisis del Dockerfile de
+referencia y la puerta suma los errores de los dos.
+
+El informe que sale de una ejecución así queda marcado como *Ejecución de
+demostración* en la cabecera y lleva una nota en el panorama general, para que
+nadie lo confunda con un fallo real del proyecto.
+
+Las dos etapas que siguen en verde lo hacen por una razón concreta, no por
+descuido. La carpeta de referencia no tiene `package.json` ni archivo de
+bloqueo, así que no hay dependencias que revisar. Y el escaneo dinámico
+necesitaría levantar el servidor vulnerable, que pide una versión antigua del
+lector de XML que la aplicación corregida ya no declara.
 
 Acceso de emergencia. El acceso a la rama principal exige dos aprobaciones a
 través de la lista de propietarios del código. La excepción urgente se activa a
@@ -274,7 +297,7 @@ de la persona.
 ├── .zap/rules.tsv          ajuste del escaneo dinámico
 ├── app/                    aplicación corregida que analiza el pipeline
 ├── scripts/                generador del informe consolidado en PDF
-├── _vulnerable_baseline/   versión vulnerable de referencia, dentro del alcance del pipeline
+├── _vulnerable_baseline/   versión vulnerable de referencia, solo entra en el modo de demostración
 ├── infrastructure/         infraestructura como código y sus evidencias
 ├── incident_response/      indicadores, guía de respuesta y reglas de detección
 └── vapt/                   reporte de vulnerabilidades, pruebas y reporte ejecutivo

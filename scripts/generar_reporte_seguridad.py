@@ -49,6 +49,10 @@ def analizar_argumentos() -> argparse.Namespace:
     analizador.add_argument(
         "--etapa", action="append", default=[], metavar="CLAVE=RESULTADO",
         help="Resultado de una etapa. Se puede repetir una vez por etapa.")
+    analizador.add_argument(
+        "--demostracion", action="store_true",
+        help="Marca el informe como ejecución de demostración, la que incluye "
+             "a propósito la versión vulnerable de referencia.")
     return analizador.parse_args()
 
 
@@ -106,10 +110,14 @@ def main() -> int:
     for motor, lista in agrupados.items():
         print(f"  {motor}: {len(lista)} hallazgos")
 
+    if argumentos.demostracion:
+        print("Modo de demostración: el informe se marca como tal.")
+
     informe = Informe(
         agrupados=agrupados,
         resultados=leer_resultados(argumentos.etapa),
         contexto=leer_contexto(),
+        demostracion=argumentos.demostracion,
     )
 
     argumentos.salida.parent.mkdir(parents=True, exist_ok=True)

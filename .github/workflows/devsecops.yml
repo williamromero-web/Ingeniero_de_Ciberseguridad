@@ -28,6 +28,17 @@ on:
   pull_request:
     branches: [ "main" ]
 
+  # Ejecución a mano, para poder lanzar el modo de demostración sin ensuciar
+  # el resultado de la rama principal.
+  workflow_dispatch:
+    inputs:
+      incluir_baseline:
+        description: >-
+          Incluir la versión vulnerable de referencia en el alcance.
+          Las puertas se disparan y la ejecución termina en rojo a propósito.
+        type: boolean
+        default: false
+
 # Cancela ejecuciones anteriores de la misma rama para no gastar minutos.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -35,6 +46,12 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  # Interruptor único que leen todas las etapas. En un empujón o en una
+  # solicitud de cambios la entrada no existe, así que queda en falso y el
+  # alcance es el normal: solo la aplicación corregida.
+  INCLUIR_BASELINE: ${{ inputs.incluir_baseline == true }}
 
 jobs:
   # =========================================================================
@@ -47,15 +64,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Preparar la configuración del detector
+        # La configuración efectiva se deriva de la real en lugar de mantener
+        # un segundo archivo, que acabaría desincronizándose. En modo de
+        # demostración se borra solo la línea que excluye la carpeta de la
+        # versión vulnerable; el resto de reglas y exclusiones quedan igual.
+        run: |
+          cp .gitleaks.toml gitleaks-efectivo.toml
+          if [ "$INCLUIR_BASELINE" = "true" ]; then
+            sed -i "/'''_vulnerable_baseline'''/d" gitleaks-efectivo.toml
+            echo "Modo de demostración: la versión vulnerable entra en el alcance."
+          fi
+          echo "=== exclusiones efectivas ==="
+          sed -n '/^paths = \[/,/^\]/p' gitleaks-efectivo.toml
+
       - name: Ejecutar el detector de secretos
         run: |
           wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz
           tar -xzf gitleaks_8.18.1_linux_x64.tar.gz
           # Se revisa el árbol de trabajo actual, no el historial. La
-          # configuración propia deja fuera el código vulnerable de referencia.
-          # La herramienta escribe el reporte y luego devuelve un código de
+          # herramienta escribe el reporte y luego devuelve un código de
           # error si encontró algo, así que el archivo queda disponible igual.
-          ./gitleaks detect --no-git --source . --config .gitleaks.toml \
+          ./gitleaks detect --no-git --source . --config gitleaks-efectivo.toml \
             --report-format json --report-path gitleaks-report.json -v
 
       - name: Publicar el reporte de secretos
@@ -86,16 +116,26 @@ jobs:
       - name: Instalar la herramienta
         run: pip install --quiet semgrep
 
+      - name: Definir el alcance del análisis
+        run: |
+          if [ "$INCLUIR_BASELINE" = "true" ]; then
+            echo "ALCANCE=app/ _vulnerable_baseline/" >> "$GITHUB_ENV"
+            echo "Modo de demostración: la versión vulnerable entra en el alcance."
+          else
+            echo "ALCANCE=app/" >> "$GITHUB_ENV"
+          fi
+
       - name: Analizar el código de la aplicación
         # Se recogen todas las severidades para que el informe consolidado
         # tenga el panorama completo. La condición que detiene la integración
         # se evalúa aparte, sobre este mismo reporte.
         #
-        # La versión vulnerable de referencia entra en el alcance a propósito,
-        # para comprobar que las reglas propias se disparan de verdad. Para
-        # volver al alcance anterior basta con dejar solo app/.
+        # $ALCANCE va sin comillas a propósito: en modo de demostración lleva
+        # dos rutas y el intérprete debe separarlas en dos argumentos.
         run: |
-          semgrep scan app/ _vulnerable_baseline/ \
+          echo "Alcance del análisis: $ALCANCE"
+          # shellcheck disable=SC2086
+          semgrep scan $ALCANCE \
             --config auto \
             --config .semgrep/custom-rules.yml \
             --json --output semgrep-report.json
@@ -211,6 +251,18 @@ jobs:
           override-error: DL3006
           no-fail: true
 
+      - name: Revisar el Dockerfile de la versión vulnerable
+        # Solo en modo de demostración. Esa versión declara la imagen base sin
+        # fijar la versión, que es justamente lo que DL3006 detiene.
+        if: env.INCLUIR_BASELINE == 'true'
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
+        with:
+          dockerfile: ./_vulnerable_baseline/app/Dockerfile
+          format: json
+          output-file: hadolint-baseline-report.json
+          override-error: DL3006
+          no-fail: true
+
       - name: Construir la imagen
         run: docker build -t fleetsec-app:ci ./app
 
@@ -243,6 +295,7 @@ jobs:
           name: container-iac-report
           path: |
             hadolint-report.json
+            hadolint-baseline-report.json
             trivy-image-report.json
             checkov-report.json
           if-no-files-found: ignore
@@ -254,7 +307,20 @@ jobs:
           CONTROLES_FALLIDOS='[ (if type == "array" then .[] else . end)
                                 | .results.failed_checks[]? ]'
 
-          DOCKERFILE=$(jq '[.[] | select(.level == "error")] | length' hadolint-report.json)
+          # En modo de demostración hay dos reportes del Dockerfile, el de la
+          # aplicación y el de la versión vulnerable. Se suman los errores de
+          # todos los que existan.
+          DOCKERFILE=0
+          for reporte in hadolint-report.json hadolint-baseline-report.json; do
+            if [ -f "$reporte" ]; then
+              ERRORES=$(jq '[.[] | select(.level == "error")] | length' "$reporte")
+              DOCKERFILE=$((DOCKERFILE + ERRORES))
+              if [ "$ERRORES" -gt 0 ]; then
+                jq -r '.[] | select(.level == "error")
+                       | "  - \(.code) en \(.file):\(.line) \(.message)"' "$reporte"
+              fi
+            fi
+          done
           IMAGEN=$(jq '[.Results[]?.Vulnerabilities[]?
                         | select(.Severity == "CRITICAL")] | length' trivy-image-report.json)
           INFRA=$(jq "$CONTROLES_FALLIDOS | length" checkov-report.json)
@@ -416,7 +482,14 @@ jobs:
         # El resultado de cada etapa se pasa como parámetro para que el
         # documento muestre cuál fue la que detuvo la integración.
         run: |
+          if [ "$INCLUIR_BASELINE" = "true" ]; then
+            MARCA="--demostracion"
+          else
+            MARCA=""
+          fi
+          # shellcheck disable=SC2086
           python scripts/generar_reporte_seguridad.py \
+            $MARCA \
             --artefactos artefactos \
             --salida informe-seguridad-fleetsec.pdf \
             --resumen resumen-seguridad.md \

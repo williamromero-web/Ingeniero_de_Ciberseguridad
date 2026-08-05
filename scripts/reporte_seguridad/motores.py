@@ -292,21 +292,28 @@ def leer_checkov(carpeta: Path) -> list[Hallazgo]:
 # ----------------------------------------------------------------------
 
 def leer_hadolint(carpeta: Path) -> list[Hallazgo]:
-    """Lee el reporte de la revisión del archivo de construcción del contenedor."""
-    datos = _cargar_json(buscar_archivo(carpeta, "hadolint-report.json"))
-    if not isinstance(datos, list):
-        return []
+    """
+    Lee los reportes de la revisión de los archivos de construcción.
 
+    En una ejecución de demostración hay dos: el de la aplicación y el de la
+    versión vulnerable de referencia. Se leen todos los que existan y se
+    juntan, porque cada registro ya dice a qué archivo pertenece.
+    """
     resultado = []
-    for registro in datos:
-        resultado.append(Hallazgo(
-            motor="Hadolint",
-            identificador=sanear(registro.get("code", "")),
-            titulo=limpiar(registro.get("message", "")),
-            severidad=_SEVERIDAD_HADOLINT.get(
-                str(registro.get("level", "")).lower(), INFORMATIVO),
-            ubicacion=_ubicacion(registro.get("file"), registro.get("line")),
-        ))
+    for nombre in ("hadolint-report.json", "hadolint-baseline-report.json"):
+        datos = _cargar_json(buscar_archivo(carpeta, nombre))
+        if not isinstance(datos, list):
+            continue
+
+        for registro in datos:
+            resultado.append(Hallazgo(
+                motor="Hadolint",
+                identificador=sanear(registro.get("code", "")),
+                titulo=limpiar(registro.get("message", "")),
+                severidad=_SEVERIDAD_HADOLINT.get(
+                    str(registro.get("level", "")).lower(), INFORMATIVO),
+                ubicacion=_ubicacion(registro.get("file"), registro.get("line")),
+            ))
     return resultado
 
 

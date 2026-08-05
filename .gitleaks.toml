@@ -27,16 +27,16 @@ regex = '''(?i)(db[_-]?password|database[_-]?password)\s*[:=]\s*['"][^'"]{6,}['"
 tags = ["password", "database"]
 
 [allowlist]
-description = "Excluye los ejemplos de la documentación y los falsos positivos"
+description = "Excluye el código vulnerable de referencia, los ejemplos de la documentación y los falsos positivos"
 # En las rutas se aceptan las dos formas de separador para que la exclusión
 # funcione igual en Windows y en Linux.
 #
-# La carpeta _vulnerable_baseline ya no se excluye: se dejó dentro del alcance
-# a propósito para comprobar que las puertas del pipeline se disparan de verdad
-# y para poder revisar cómo queda el informe consolidado cuando hay hallazgos.
-# Para volver al comportamiento anterior basta con reponer la línea
-# '''_vulnerable_baseline''' en esta lista.
+# La primera línea, la de _vulnerable_baseline, es la que borra el pipeline
+# cuando se lanza a mano el modo de demostración, para que la versión vulnerable
+# entre en el alcance y las puertas se disparen. En una ejecución normal se
+# respeta y esa carpeta queda fuera.
 paths = [
+  '''_vulnerable_baseline''',
   '''vapt[\\/]poc''',
   '''README\.md''',
 ]
