@@ -90,8 +90,12 @@ jobs:
         # Se recogen todas las severidades para que el informe consolidado
         # tenga el panorama completo. La condición que detiene la integración
         # se evalúa aparte, sobre este mismo reporte.
+        #
+        # La versión vulnerable de referencia entra en el alcance a propósito,
+        # para comprobar que las reglas propias se disparan de verdad. Para
+        # volver al alcance anterior basta con dejar solo app/.
         run: |
-          semgrep scan app/ \
+          semgrep scan app/ _vulnerable_baseline/ \
             --config auto \
             --config .semgrep/custom-rules.yml \
             --json --output semgrep-report.json
@@ -131,6 +135,10 @@ jobs:
       # Se ejecuta la herramienta desde su imagen oficial para no depender del
       # instalador ni de la accion. La versión queda fijada.
       - name: Revisar las dependencias
+        # El alcance sigue siendo app/. La versión vulnerable de referencia no
+        # declara dependencias propias, no tiene package.json ni archivo de
+        # bloqueo, así que no hay nada que revisar ahí. Quien la analiza es el
+        # detector de secretos y el análisis de código.
         run: |
           docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work aquasec/trivy:0.72.0 \
             fs --scanners vuln --ignore-unfixed \

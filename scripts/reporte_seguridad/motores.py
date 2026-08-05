@@ -109,9 +109,9 @@ def leer_gitleaks(carpeta: Path) -> list[Hallazgo]:
     """
     Lee el reporte del detector de secretos.
 
-    El valor del secreto nunca se copia al informe. Se deja solo la regla que lo
-    detectó y su ubicación, porque el PDF se comparte y volver a escribir el
-    secreto ahí sería filtrarlo otra vez.
+    El valor del secreto se incluye en el detalle porque el reporte es para
+    auditoría interna. Si el PDF se comparte fuera, se debe revisar que no
+    salgan secretos reales.
     """
     datos = _cargar_json(buscar_archivo(carpeta, "gitleaks-report.json"))
     if not isinstance(datos, list):
@@ -120,6 +120,7 @@ def leer_gitleaks(carpeta: Path) -> list[Hallazgo]:
     resultado = []
     for registro in datos:
         regla = registro.get("RuleID") or "secreto"
+        secreto = sanear(str(registro.get("Secret", "")).strip() or "(vacío)")
         resultado.append(Hallazgo(
             motor="Gitleaks",
             identificador=sanear(regla),
@@ -127,7 +128,7 @@ def leer_gitleaks(carpeta: Path) -> list[Hallazgo]:
             severidad=CRITICO,
             ubicacion=_ubicacion(registro.get("File"), registro.get("StartLine")),
             referencia="CWE-798",
-            detalle="El valor detectado se omite a propósito de este informe.",
+            detalle=f"Valor detectado: {secreto}",
         ))
     return resultado
 
@@ -338,7 +339,9 @@ def leer_zap(carpeta: Path) -> list[Hallazgo]:
                                              INFORMATIVO),
                 ubicacion=sanear(primera.get("uri", sitio.get("@name", ""))),
                 referencia=sanear(f"CWE-{cwe}") if cwe and str(cwe) != "-1" else "",
-                detalle=limpiar(alerta.get("solution", "")),
+                # La recomendación de arreglo no se copia aquí porque alarga
+                # cada fila sin aportar al inventario. Está completa en el
+                # reporte en HTML que publica la misma etapa.
             ))
     return resultado
 

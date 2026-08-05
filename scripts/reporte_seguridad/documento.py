@@ -287,19 +287,27 @@ class Informe:
 
         filas = []
         for hallazgo in visibles:
+            # El detalle acompaña al título en la misma celda. Es donde aparece,
+            # por ejemplo, el valor del secreto que encontró Gitleaks.
+            descripcion = hallazgo.titulo
+            if hallazgo.detalle:
+                descripcion = f"{descripcion} · {hallazgo.detalle}"
+
             filas.append([
                 Celda(f"  {hallazgo.identificador}"),
-                Celda(f"  {hallazgo.titulo}"),
+                Celda(f"  {descripcion}"),
                 Celda(hallazgo.severidad,
                       color=COLOR_SEVERIDAD.get(hallazgo.severidad, Paleta.TEXTO),
                       negrita=True, alineacion="C"),
                 Celda(hallazgo.puntaje or "-", alineacion="C"),
-                Celda(f"  {hallazgo.ubicacion}", recorte="izquierda"),
+                Celda(f"  {hallazgo.ubicacion}"),
             ])
 
+        # La columna de ubicación va holgada porque ahí caen los URLs completos
+        # del escaneo dinámico, que son los textos más largos del informe.
         pdf.tabla(
             ["  Identificador", "  Hallazgo", "Severidad", "Puntaje", "  Ubicación"],
-            [30, 78, 20, 16, 38],
+            [26, 66, 19, 14, 57],
             filas,
             alineacion_encabezado=["L", "L", "C", "C", "L"],
         )

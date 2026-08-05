@@ -77,7 +77,8 @@ class Medidas:
     BARRA_SEPARACION = 6.5
 
     ENCABEZADO_ALTO = 6.5
-    FILA_ALTO = 6.4
+    FILA_ALTO = 6.4       # Altura mínima de una fila de una sola línea.
+    LINEA_TABLA = 4.0     # Interlineado cuando una celda ocupa varias líneas.
 
     SANGRIA_CELDA = 1.0  # Separación interna que aplica FPDF dentro de una celda.
 
@@ -148,17 +149,13 @@ def limpiar(texto: object) -> str:
 class Celda:
     """Una celda de tabla con su color y su peso tipográfico."""
 
-    __slots__ = ("texto", "color", "negrita", "alineacion", "recorte")
+    __slots__ = ("texto", "color", "negrita", "alineacion")
 
-    def __init__(self, texto, color=None, negrita=False, alineacion="L",
-                 recorte="derecha"):
+    def __init__(self, texto, color=None, negrita=False, alineacion="L"):
         self.texto = sanear(texto)
         self.color = color or Paleta.TEXTO
         self.negrita = negrita
         self.alineacion = alineacion
-        # En una ruta de archivo lo que importa está al final, así que se
-        # recorta por la izquierda para no perder el nombre ni la línea.
-        self.recorte = recorte
 
 
 class Documento(FPDF):
@@ -340,15 +337,25 @@ class Documento(FPDF):
         """
         Dibuja una tabla con cabecera azul y filas alternadas.
 
-        El texto que no cabe en su columna se recorta con puntos suspensivos,
-        para que ninguna celda invada la vecina.
+        El texto se envuelve en múltiples líneas si no cabe en la columna, para
+        que los URLs, mensajes y errores sean legibles completos.
         """
         self._asegurar_espacio(Medidas.ENCABEZADO_ALTO + Medidas.FILA_ALTO * 2)
         self._dibujar_encabezado(encabezados, anchos, alineacion_encabezado)
 
         alterna = True
         for fila in filas:
-            if self.get_y() + Medidas.FILA_ALTO > self.page_break_trigger:
+            # Se mide primero cuántas líneas ocupa cada celda, porque la altura
+            # de la fila es la de la celda más alta y hay que conocerla antes
+            # de pintar el fondo.
+            reparto = self._repartir_lineas(fila, anchos)
+            alto_fila = max(
+                Medidas.FILA_ALTO,
+                max(len(lineas) for lineas in reparto) * Medidas.LINEA_TABLA
+                + Medidas.SANGRIA_CELDA * 2,
+            )
+
+            if self.get_y() + alto_fila > self.page_break_trigger:
                 self.add_page()
                 self._dibujar_encabezado(encabezados, anchos, alineacion_encabezado)
                 alterna = True
@@ -356,23 +363,32 @@ class Documento(FPDF):
             fondo = Paleta.FILA_ALTERNA if alterna else Paleta.BLANCO
             alterna = not alterna
 
-            x = Medidas.MARGEN
             y = self.get_y()
-            for celda, ancho in zip(fila, anchos):
-                self.set_fill_color(*fondo)
-                self.rect(x, y, ancho, Medidas.FILA_ALTO, style="F")
 
+            # El fondo se pinta de una sola vez, con la altura ya calculada.
+            self.set_fill_color(*fondo)
+            self.rect(Medidas.MARGEN, y, sum(anchos), alto_fila, style="F")
+
+            x = Medidas.MARGEN
+            for celda, ancho, lineas in zip(fila, anchos, reparto):
                 estilo = "B" if celda.negrita else ""
                 self.set_font(Tipografia.FAMILIA, estilo, Tipografia.CUERPO_TABLA)
                 self.set_text_color(*celda.color)
-                self.set_xy(x, y)
-                disponible = ancho - 2 * Medidas.SANGRIA_CELDA
-                self.cell(ancho, Medidas.FILA_ALTO,
-                          self._recortar(celda.texto, disponible, celda.recorte),
-                          align=celda.alineacion)
+
+                # Las celdas de una sola línea se centran verticalmente en la
+                # fila; las de varias arrancan arriba.
+                if len(lineas) == 1:
+                    inicio = y + (alto_fila - Medidas.LINEA_TABLA) / 2
+                else:
+                    inicio = y + Medidas.SANGRIA_CELDA
+
+                for numero, texto in enumerate(lineas):
+                    self.set_xy(x, inicio + numero * Medidas.LINEA_TABLA)
+                    self.cell(ancho, Medidas.LINEA_TABLA, texto,
+                              align=celda.alineacion)
                 x += ancho
 
-            self.set_xy(Medidas.MARGEN, y + Medidas.FILA_ALTO)
+            self.set_xy(Medidas.MARGEN, y + alto_fila)
 
         self.set_text_color(*Paleta.TEXTO)
 
@@ -395,29 +411,68 @@ class Documento(FPDF):
     # Utilidades internas
     # ------------------------------------------------------------------
 
-    def _recortar(self, texto: str, ancho: float, lado: str = "derecha") -> str:
+    def _repartir_lineas(self, fila: list[Celda],
+                         anchos: list[float]) -> list[list[str]]:
+        """Devuelve, para cada celda de la fila, las líneas que va a ocupar."""
+        reparto = []
+        for celda, ancho in zip(fila, anchos):
+            # La medición depende del grosor de la letra, así que hay que fijar
+            # la fuente de esta celda antes de medir.
+            self.set_font(Tipografia.FAMILIA,
+                          "B" if celda.negrita else "",
+                          Tipografia.CUERPO_TABLA)
+            reparto.append(
+                self._envolver(celda.texto, ancho - 2 * Medidas.SANGRIA_CELDA))
+        return reparto
+
+    def _envolver(self, texto: str, ancho: float) -> list[str]:
         """
-        Recorta un texto para que quepa en el ancho indicado.
+        Parte un texto en las líneas necesarias para que quepa en el ancho dado.
 
-        Por defecto quita el final. En una ruta de archivo conviene lo
-        contrario, porque el nombre y la línea están al final y son justamente
-        lo que se necesita para ubicar el hallazgo.
+        Nada se recorta: el contenido se muestra completo. Se corta por espacios
+        siempre que se pueda, y cuando una sola palabra no cabe, como pasa con
+        un URL largo o con un secreto, se parte por caracteres.
         """
-        if self.get_string_width(texto) <= ancho:
-            return texto
+        if not texto:
+            return [""]
 
-        puntos = "..."
-        limite = ancho - self.get_string_width(puntos)
-        recortado = texto
+        # La sangría de la celda va en el propio texto de varias columnas, así
+        # que se conserva para que la primera línea siga alineada con el resto.
+        margen_izquierdo = len(texto) - len(texto.lstrip())
+        sangria = texto[:margen_izquierdo]
 
-        if lado == "izquierda":
-            while recortado and self.get_string_width(recortado) > limite:
-                recortado = recortado[1:]
-            return puntos + recortado.lstrip()
+        lineas: list[str] = []
+        actual = sangria
 
-        while recortado and self.get_string_width(recortado) > limite:
-            recortado = recortado[:-1]
-        return recortado.rstrip() + puntos
+        for palabra in texto.strip().split(" "):
+            if not palabra:
+                continue
+            tentativa = f"{actual} {palabra}" if actual.strip() else sangria + palabra
+
+            if self.get_string_width(tentativa) <= ancho:
+                actual = tentativa
+                continue
+
+            if actual.strip():
+                lineas.append(actual)
+                actual = sangria
+
+            # La palabra sola tampoco cabe: se parte por caracteres.
+            if self.get_string_width(sangria + palabra) > ancho:
+                trozo = sangria
+                for caracter in palabra:
+                    if self.get_string_width(trozo + caracter) > ancho and trozo.strip():
+                        lineas.append(trozo)
+                        trozo = sangria + caracter
+                    else:
+                        trozo += caracter
+                actual = trozo
+            else:
+                actual = sangria + palabra
+
+        if actual.strip() or not lineas:
+            lineas.append(actual)
+        return lineas
 
     def _asegurar_espacio(self, alto: float):
         """Abre una página nueva si el bloque no cabe en lo que queda."""

@@ -168,9 +168,24 @@ criterio propio y quien lea el informe debe poder discutirlo.
 
 Para mantener la ejecución por debajo de 15 minutos, las etapas corren en
 paralelo, se cancela la ejecución anterior de la misma rama, se guarda en caché
-la instalación de las herramientas, cada escáner revisa solo su carpeta
-dejando fuera la versión de referencia, y las acciones de terceros se fijan por
-versión exacta.
+la instalación de las herramientas, cada escáner revisa solo la carpeta que le
+corresponde, y las acciones de terceros se fijan por versión exacta.
+
+### La versión vulnerable de referencia está dentro del alcance
+
+El detector de secretos y el análisis de código revisan también
+`_vulnerable_baseline/`, que conserva la aplicación antes de las correcciones
+con sus secretos y sus fallas originales. Se hizo a propósito: es la forma de
+comprobar que las puertas se disparan de verdad en lugar de confiar en que
+funcionarían, y de que el informe consolidado se pueda revisar con hallazgos
+reales y no solo en vacío.
+
+La consecuencia es que el pipeline queda en rojo mientras esa carpeta siga en
+el alcance, porque encuentra lo que se le puso a encontrar. Para volver al
+comportamiento anterior hay que deshacer dos cosas: reponer
+`'''_vulnerable_baseline'''` en la lista `paths` del allowlist de
+`.gitleaks.toml`, y dejar el alcance de Semgrep en `app/`. Ambos sitios están
+señalados con un comentario en el propio archivo.
 
 Acceso de emergencia. El acceso a la rama principal exige dos aprobaciones a
 través de la lista de propietarios del código. La excepción urgente se activa a
@@ -259,7 +274,7 @@ de la persona.
 ├── .zap/rules.tsv          ajuste del escaneo dinámico
 ├── app/                    aplicación corregida que analiza el pipeline
 ├── scripts/                generador del informe consolidado en PDF
-├── _vulnerable_baseline/   versión vulnerable de referencia, ignorada por el pipeline
+├── _vulnerable_baseline/   versión vulnerable de referencia, dentro del alcance del pipeline
 ├── infrastructure/         infraestructura como código y sus evidencias
 ├── incident_response/      indicadores, guía de respuesta y reglas de detección
 └── vapt/                   reporte de vulnerabilidades, pruebas y reporte ejecutivo
