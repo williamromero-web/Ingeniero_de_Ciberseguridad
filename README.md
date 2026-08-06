@@ -184,31 +184,50 @@ alcance**. Los empujones y las solicitudes de cambios no se ven afectados: ahí
 el interruptor siempre está apagado y el alcance es solo la aplicación
 corregida.
 
-| Etapa | Ejecución normal | Con el interruptor activo |
-|-------|:----------------:|:-------------------------:|
-| Secretos | Aprobado | **Detenido**, encuentra la clave de nube y el secreto de sesión |
-| Análisis de código | Aprobado | **Detenido**, se disparan las reglas propias sobre el código vulnerable |
-| Dependencias e inventario | Aprobado | Aprobado, la carpeta no declara dependencias propias |
-| Contenedor e infraestructura | Aprobado | **Detenido**, el Dockerfile de referencia no fija la versión de la imagen base |
-| Escaneo dinámico | Aprobado | Aprobado, sigue recorriendo la aplicación corregida |
+Las cinco etapas se detienen, cada una por el control que le corresponde:
+
+| Etapa | Normal | Con el interruptor | Qué la detiene |
+|-------|:------:|:------------------:|----------------|
+| Secretos | Aprobado | **Detenido** | La clave de nube y el secreto de sesión escritos en el código |
+| Análisis de código | Aprobado | **Detenido** | Las reglas propias sobre la consulta sin parametrizar y el token sin verificar |
+| Dependencias e inventario | Aprobado | **Detenido** | `xmldom 0.6.0`, con puntaje 9.8, por encima del umbral de dependencia directa |
+| Contenedor e infraestructura | Aprobado | **Detenido** | Fallas críticas en la imagen construida a partir del archivo de bloqueo anterior |
+| Escaneo dinámico | Aprobado | **Detenido** | El recorrido de la API encuentra la inyección sobre el servidor vulnerable |
 
 Cómo está montado. Hay una sola variable, `INCLUIR_BASELINE`, que se calcula una
-vez al principio del flujo y leen todas las etapas. El detector de secretos
-deriva su configuración de la real y borra únicamente la línea que excluye la
-carpeta, en lugar de mantener un segundo archivo que acabaría
-desincronizándose. El análisis de código recibe la lista de rutas por variable.
-La revisión del contenedor añade un segundo análisis del Dockerfile de
-referencia y la puerta suma los errores de los dos.
+vez al principio del flujo y leen todas las etapas:
+
+- El detector de secretos deriva su configuración de la real y borra únicamente
+  la línea que excluye la carpeta, en lugar de mantener un segundo archivo que
+  acabaría desincronizándose.
+- El análisis de código recibe la lista de rutas por variable.
+- La revisión de dependencias añade un segundo escaneo sobre
+  `_vulnerable_baseline/app/`, porque la herramienta acepta una sola ruta por
+  ejecución.
+- La revisión del contenedor construye además la imagen vulnerable y la analiza
+  aparte. La puerta suma las fallas críticas de las dos imágenes.
+- El escaneo dinámico levanta el servidor vulnerable en lugar del corregido.
 
 El informe que sale de una ejecución así queda marcado como *Ejecución de
 demostración* en la cabecera y lleva una nota en el panorama general, para que
 nadie lo confunda con un fallo real del proyecto.
 
-Las dos etapas que siguen en verde lo hacen por una razón concreta, no por
-descuido. La carpeta de referencia no tiene `package.json` ni archivo de
-bloqueo, así que no hay dependencias que revisar. Y el escaneo dinámico
-necesitaría levantar el servidor vulnerable, que pide una versión antigua del
-lector de XML que la aplicación corregida ya no declara.
+### Levantar cada versión por separado
+
+Hay un archivo de composición por versión, para poder tener las dos a la vez y
+compararlas:
+
+```bash
+# Versión corregida, en el puerto 3000
+cd app && JWT_SECRET=$(openssl rand -hex 24) docker compose up -d --build
+
+# Versión vulnerable de referencia, en el puerto 3001
+docker compose -f _vulnerable_baseline/docker-compose.yml up -d --build
+```
+
+La versión vulnerable no recibe ninguna variable de entorno porque lleva sus
+secretos escritos en el código, que es justamente la falla que hay que
+demostrar. Es insegura a propósito y no debe salir del entorno local.
 
 Acceso de emergencia. El acceso a la rama principal exige dos aprobaciones a
 través de la lista de propietarios del código. La excepción urgente se activa a

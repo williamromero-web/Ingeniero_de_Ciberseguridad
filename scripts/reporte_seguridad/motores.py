@@ -181,13 +181,22 @@ def _referencia_semgrep(metadatos: dict) -> str:
 # Trivy, tanto en dependencias como en la imagen del contenedor
 # ----------------------------------------------------------------------
 
-def leer_trivy(carpeta: Path, nombre_archivo: str, motor: str) -> list[Hallazgo]:
+def leer_trivy(carpeta: Path, nombres: tuple[str, ...], motor: str) -> list[Hallazgo]:
     """
-    Lee un reporte de Trivy.
+    Lee uno o varios reportes de Trivy y los junta.
 
     Sirve para el análisis de dependencias y para el de la imagen, porque ambos
-    comparten el mismo esquema.
+    comparten el mismo esquema. En una ejecución de demostración hay un segundo
+    reporte, el de la versión vulnerable de referencia, que se suma al primero.
     """
+    resultado = []
+    for nombre in nombres:
+        resultado.extend(_leer_un_trivy(carpeta, nombre, motor))
+    return resultado
+
+
+def _leer_un_trivy(carpeta: Path, nombre_archivo: str,
+                   motor: str) -> list[Hallazgo]:
     datos = _cargar_json(buscar_archivo(carpeta, nombre_archivo))
     if not isinstance(datos, dict):
         return []
@@ -218,8 +227,10 @@ def leer_trivy(carpeta: Path, nombre_archivo: str, motor: str) -> list[Hallazgo]
                     str(registro.get("Severity", "")).upper(), INFORMATIVO),
                 ubicacion=sanear(f"{paquete} {instalada}".strip() or objetivo),
                 puntaje=f"{puntaje:.1f}" if puntaje else "",
-                referencia=sanear(f"corrige en {corregida}" if corregida
-                                  else "sin versión corregida"),
+                # La versión que corrige acompaña al título, porque es lo
+                # primero que necesita quien va a arreglar la dependencia.
+                detalle=sanear(f"corrige en {corregida}" if corregida
+                               else "sin versión corregida"),
                 etiquetas=etiquetas,
             ))
     return resultado
@@ -282,7 +293,9 @@ def leer_checkov(carpeta: Path) -> list[Hallazgo]:
                 severidad=severidad,
                 ubicacion=_ubicacion(registro.get("file_path"),
                                      rango[0] if rango else None),
-                referencia=sanear(registro.get("resource", "")),
+                # El recurso afectado acompaña al título. La herramienta no
+                # entrega una clasificación externa del tipo CWE u OWASP.
+                detalle=sanear(registro.get("resource", "")),
             ))
     return resultado
 
@@ -367,10 +380,14 @@ def recolectar(carpeta: Path) -> dict[str, list[Hallazgo]]:
     return {
         "Gitleaks": leer_gitleaks(carpeta),
         "Semgrep": leer_semgrep(carpeta),
-        "Trivy dependencias": leer_trivy(carpeta, "trivy-fs-report.json",
-                                         "Trivy dependencias"),
-        "Trivy imagen": leer_trivy(carpeta, "trivy-image-report.json",
-                                   "Trivy imagen"),
+        "Trivy dependencias": leer_trivy(
+            carpeta,
+            ("trivy-fs-report.json", "trivy-fs-baseline-report.json"),
+            "Trivy dependencias"),
+        "Trivy imagen": leer_trivy(
+            carpeta,
+            ("trivy-image-report.json", "trivy-image-baseline-report.json"),
+            "Trivy imagen"),
         "Hadolint": leer_hadolint(carpeta),
         "Checkov": leer_checkov(carpeta),
         "OWASP ZAP": leer_zap(carpeta),

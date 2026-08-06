@@ -175,21 +175,31 @@ jobs:
       # Se ejecuta la herramienta desde su imagen oficial para no depender del
       # instalador ni de la accion. La versión queda fijada.
       - name: Revisar las dependencias
-        # El alcance sigue siendo app/. La versión vulnerable de referencia no
-        # declara dependencias propias, no tiene package.json ni archivo de
-        # bloqueo, así que no hay nada que revisar ahí. Quien la analiza es el
-        # detector de secretos y el análisis de código.
         run: |
           docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work aquasec/trivy:0.72.0 \
             fs --scanners vuln --ignore-unfixed \
             --format json --output trivy-fs-report.json app/
+
+      - name: Revisar las dependencias de la versión vulnerable
+        # Solo en modo de demostración. Esa carpeta conserva el archivo de
+        # bloqueo anterior a la corrección, con fallas conocidas de puntaje
+        # alto. Se analiza aparte porque la herramienta acepta una sola ruta
+        # por ejecución.
+        if: env.INCLUIR_BASELINE == 'true'
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work aquasec/trivy:0.72.0 \
+            fs --scanners vuln --ignore-unfixed \
+            --format json --output trivy-fs-baseline-report.json \
+            _vulnerable_baseline/app/
 
       - name: Publicar el reporte de dependencias
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: trivy-fs-report
-          path: trivy-fs-report.json
+          path: |
+            trivy-fs-report.json
+            trivy-fs-baseline-report.json
           if-no-files-found: ignore
 
       - name: Detener ante fallas con puntaje alto
@@ -197,17 +207,22 @@ jobs:
         # directa, y de 9.0 o más en una indirecta. Cuando la herramienta no
         # informa la relación se asume directa, que es el criterio más estricto.
         run: |
-          jq -r '
-            [ .Results[]?.Vulnerabilities[]?
-              | { id: .VulnerabilityID,
-                  paquete: .PkgName,
-                  relacion: (.Relationship // "direct"),
-                  puntaje: ([.CVSS[]?.V3Score] | max // 0) }
-              | select( (.relacion == "indirect" and .puntaje >= 9.0)
-                        or (.relacion != "indirect" and .puntaje >= 8.0) ) ]
-            | .[] | "  - \(.id) en \(.paquete) (\(.relacion), CVSS \(.puntaje))"
-          ' trivy-fs-report.json | tee dependencias-bloqueantes.txt
+          : > dependencias-bloqueantes.txt
+          for reporte in trivy-fs-report.json trivy-fs-baseline-report.json; do
+            [ -f "$reporte" ] || continue
+            jq -r --arg origen "$reporte" '
+              [ .Results[]?.Vulnerabilities[]?
+                | { id: .VulnerabilityID,
+                    paquete: .PkgName,
+                    relacion: (.Relationship // "direct"),
+                    puntaje: ([.CVSS[]?.V3Score] | max // 0) }
+                | select( (.relacion == "indirect" and .puntaje >= 9.0)
+                          or (.relacion != "indirect" and .puntaje >= 8.0) ) ]
+              | .[] | "  - \(.id) en \(.paquete) (\(.relacion), CVSS \(.puntaje)) [\($origen)]"
+            ' "$reporte" >> dependencias-bloqueantes.txt
+          done
 
+          cat dependencias-bloqueantes.txt
           if [ -s dependencias-bloqueantes.txt ]; then
             echo "Las dependencias detuvieron la integración por superar el puntaje permitido."
             exit 1
@@ -274,6 +289,21 @@ jobs:
             image --ignore-unfixed \
             --format json --output trivy-image-report.json fleetsec-app:ci
 
+      - name: Construir y revisar la imagen de la versión vulnerable
+        # Solo en modo de demostración. Esa imagen instala las dependencias
+        # anteriores a la corrección, corre como root y conserva las
+        # herramientas de construcción, así que la revisión encuentra fallas
+        # críticas y la puerta se dispara.
+        if: env.INCLUIR_BASELINE == 'true'
+        run: |
+          docker build -t fleetsec-app:vulnerable ./_vulnerable_baseline/app
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$GITHUB_WORKSPACE:/work" -w /work aquasec/trivy:0.72.0 \
+            image --ignore-unfixed \
+            --format json --output trivy-image-baseline-report.json \
+            fleetsec-app:vulnerable
+
       - name: Cache de dependencias
         uses: actions/cache@v4
         with:
@@ -297,6 +327,7 @@ jobs:
             hadolint-report.json
             hadolint-baseline-report.json
             trivy-image-report.json
+            trivy-image-baseline-report.json
             checkov-report.json
           if-no-files-found: ignore
 
@@ -321,8 +352,21 @@ jobs:
               fi
             fi
           done
-          IMAGEN=$(jq '[.Results[]?.Vulnerabilities[]?
-                        | select(.Severity == "CRITICAL")] | length' trivy-image-report.json)
+          # Igual que con el Dockerfile, en modo de demostración hay dos
+          # reportes de imagen: la de la aplicación y la vulnerable.
+          IMAGEN=0
+          for reporte in trivy-image-report.json trivy-image-baseline-report.json; do
+            if [ -f "$reporte" ]; then
+              CRITICAS=$(jq '[.Results[]?.Vulnerabilities[]?
+                              | select(.Severity == "CRITICAL")] | length' "$reporte")
+              IMAGEN=$((IMAGEN + CRITICAS))
+              if [ "$CRITICAS" -gt 0 ]; then
+                jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")
+                       | "  - \(.VulnerabilityID) en \(.PkgName) \(.InstalledVersion)"' \
+                  "$reporte" | sort -u | head -20
+              fi
+            fi
+          done
           INFRA=$(jq "$CONTROLES_FALLIDOS | length" checkov-report.json)
           PUERTOS=$(jq "$CONTROLES_FALLIDOS
                         | map(select(.check_id == \"CKV_AWS_24\"
@@ -362,10 +406,21 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Levantar la aplicación en un entorno de pruebas
+        # En modo de demostración se levanta la versión vulnerable en lugar de
+        # la corregida, para que el recorrido de la API encuentre las fallas
+        # reales y la puerta se dispare.
         run: |
-          docker build -t fleetsec-app:ci ./app
-          docker run -d --network host --name app \
-            -e JWT_SECRET=super_secret_key_ci_solo_para_pruebas fleetsec-app:ci
+          if [ "$INCLUIR_BASELINE" = "true" ]; then
+            echo "Modo de demostración: se levanta la versión vulnerable."
+            docker build -t fleetsec-app:ci ./_vulnerable_baseline/app
+            # Esa versión lleva el secreto escrito en el código y no lee
+            # ninguna variable de entorno.
+            docker run -d --network host --name app fleetsec-app:ci
+          else
+            docker build -t fleetsec-app:ci ./app
+            docker run -d --network host --name app \
+              -e JWT_SECRET=super_secret_key_ci_solo_para_pruebas fleetsec-app:ci
+          fi
           for i in $(seq 1 30); do
             curl -sf http://localhost:3000/ >/dev/null 2>&1 && { echo "aplicación disponible"; break; } || sleep 2
           done
@@ -375,7 +430,12 @@ jobs:
 
       - name: Generar un token de sesión para las pruebas
         run: |
-          TOKEN=$(docker exec app node -e "console.log(require('jsonwebtoken').sign({id:1,role:'admin'},process.env.JWT_SECRET,{algorithm:'HS256'}))")
+          if [ "$INCLUIR_BASELINE" = "true" ]; then
+            # La versión vulnerable firma con el secreto que lleva escrito.
+            TOKEN=$(docker exec app node -e "console.log(require('jsonwebtoken').sign({id:1,role:'admin'},'super_secret_key',{algorithm:'HS256'}))")
+          else
+            TOKEN=$(docker exec app node -e "console.log(require('jsonwebtoken').sign({id:1,role:'admin'},process.env.JWT_SECRET,{algorithm:'HS256'}))")
+          fi
           echo "::add-mask::$TOKEN"
           echo "ZAP_JWT_TOKEN=$TOKEN" >> $GITHUB_ENV
 

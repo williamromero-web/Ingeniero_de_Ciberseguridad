@@ -284,13 +284,32 @@ class Informe:
 
         pdf.parrafo(
             "Los hallazgos se agrupan por motor y dentro de cada motor van "
-            "ordenados de mayor a menor gravedad. La columna de puntaje solo "
-            "aparece cuando la herramienta entrega un valor CVSS.")
+            "ordenados de mayor a menor gravedad. La columna de referencia "
+            "muestra el puntaje CVSS cuando la herramienta lo entrega, porque "
+            "es la medida comparable entre hallazgos, y si no lo hay muestra la "
+            "clasificación del catálogo público CWE o del listado de OWASP. "
+            "Queda en guion solo cuando la herramienta no publica ninguna de "
+            "las dos, como pasa con la revisión del archivo de construcción.")
 
         for motor, lista in self.agrupados.items():
             if not lista:
                 continue
             self._tabla_motor(pdf, motor, lista)
+
+    @staticmethod
+    def _referencia(hallazgo: modelo.Hallazgo) -> str:
+        """
+        Devuelve la clasificación externa que se imprime en la tabla.
+
+        Se prefiere el puntaje CVSS cuando la herramienta lo entrega, porque es
+        la medida comparable entre hallazgos. Si no hay puntaje se usa la
+        clasificación del catálogo público, CWE o el listado de OWASP. Las
+        herramientas que no publican ninguna de las dos, como la revisión del
+        archivo de construcción, muestran un guion.
+        """
+        if hallazgo.puntaje:
+            return f"CVSS {hallazgo.puntaje}"
+        return hallazgo.referencia or "-"
 
     def _tabla_motor(self, pdf: Documento, motor: str,
                      lista: list[modelo.Hallazgo]):
@@ -314,15 +333,15 @@ class Informe:
                 Celda(hallazgo.severidad,
                       color=COLOR_SEVERIDAD.get(hallazgo.severidad, Paleta.TEXTO),
                       negrita=True, alineacion="C"),
-                Celda(hallazgo.puntaje or "-", alineacion="C"),
+                Celda(self._referencia(hallazgo), alineacion="C"),
                 Celda(f"  {hallazgo.ubicacion}"),
             ])
 
         # La columna de ubicación va holgada porque ahí caen los URLs completos
         # del escaneo dinámico, que son los textos más largos del informe.
         pdf.tabla(
-            ["  Identificador", "  Hallazgo", "Severidad", "Puntaje", "  Ubicación"],
-            [26, 66, 19, 14, 57],
+            ["  Identificador", "  Hallazgo", "Severidad", "Referencia", "  Ubicación"],
+            [26, 62, 19, 20, 55],
             filas,
             alineacion_encabezado=["L", "L", "C", "C", "L"],
         )
