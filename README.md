@@ -190,8 +190,8 @@ Las cinco etapas se detienen, cada una por el control que le corresponde:
 |-------|:------:|:------------------:|----------------|
 | Secretos | Aprobado | **Detenido** | La clave de nube y el secreto de sesión escritos en el código |
 | Análisis de código | Aprobado | **Detenido** | Las reglas propias sobre la consulta sin parametrizar y el token sin verificar |
-| Dependencias e inventario | Aprobado | **Detenido** | `xmldom 0.6.0`, con puntaje 9.8, por encima del umbral de dependencia directa |
-| Contenedor e infraestructura | Aprobado | **Detenido** | Fallas críticas en la imagen construida a partir del archivo de bloqueo anterior |
+| Dependencias e inventario | Aprobado | **Detenido** | Cuatro fallas en `tar 6.2.1`, con puntajes entre 8.2 y 8.8 |
+| Contenedor e infraestructura | Aprobado | **Detenido** | Una falla crítica en la imagen construida con el archivo de bloqueo anterior |
 | Escaneo dinámico | Aprobado | **Detenido** | El recorrido de la API encuentra la inyección sobre el servidor vulnerable |
 
 Cómo está montado. Hay una sola variable, `INCLUIR_BASELINE`, que se calcula una
@@ -207,6 +207,17 @@ vez al principio del flujo y leen todas las etapas:
 - La revisión del contenedor construye además la imagen vulnerable y la analiza
   aparte. La puerta suma las fallas críticas de las dos imágenes.
 - El escaneo dinámico levanta el servidor vulnerable en lugar del corregido.
+
+Qué detiene realmente cada puerta, comprobado ejecutando las herramientas sobre
+la carpeta de referencia. Las fallas no vienen de las dependencias declaradas
+sino de `tar 6.2.1`, que entra de forma transitiva a través de `sqlite3 5.1.7`.
+El paquete `xmldom 0.6.0` no aparece en el reporte pese a tener una falla
+conocida, porque las etapas se ejecutan con la opción que descarta lo que aún
+no tiene versión que lo corrija, y el arreglo de ese paquete no es una
+actualización sino migrar al paquete con ámbito, que es lo que hace la versión
+corregida. Además la herramienta no informa si la dependencia es directa o
+indirecta para este archivo de bloqueo, y al asumirse directa se le aplica el
+umbral más estricto de 8.0, que es lo que hace que bloqueen.
 
 El informe que sale de una ejecución así queda marcado como *Ejecución de
 demostración* en la cabecera y lleva una nota en el panorama general, para que

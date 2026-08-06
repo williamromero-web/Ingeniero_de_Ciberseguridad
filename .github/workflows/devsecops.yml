@@ -421,12 +421,25 @@ jobs:
             docker run -d --network host --name app \
               -e JWT_SECRET=super_secret_key_ci_solo_para_pruebas fleetsec-app:ci
           fi
+          # Se espera a que el servidor conteste, sea cual sea el código. La
+          # versión corregida responde 200 en la raíz y la vulnerable devuelve
+          # 404 porque no define esa ruta; en los dos casos el servidor ya está
+          # levantado, que es lo único que hace falta comprobar aquí.
+          CODIGO=000
           for i in $(seq 1 30); do
-            curl -sf http://localhost:3000/ >/dev/null 2>&1 && { echo "aplicación disponible"; break; } || sleep 2
+            CODIGO=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/ 2>/dev/null || echo 000)
+            if [ "$CODIGO" != "000" ]; then
+              echo "aplicación disponible, responde con el código $CODIGO"
+              break
+            fi
+            sleep 2
           done
           echo "=== estado de los contenedores ==="; docker ps -a
           echo "=== registros de la aplicación ==="; docker logs app || true
-          curl -sf http://localhost:3000/ >/dev/null || { echo "La aplicación no responde en el puerto 3000"; exit 1; }
+          if [ "$CODIGO" = "000" ]; then
+            echo "La aplicación no responde en el puerto 3000"
+            exit 1
+          fi
 
       - name: Generar un token de sesión para las pruebas
         run: |
